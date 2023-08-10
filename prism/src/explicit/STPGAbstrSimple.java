@@ -41,6 +41,7 @@ import java.util.Map.Entry;
 
 import common.IterableStateSet;
 import explicit.rewards.STPGRewards;
+import explicit.rewards.STPGRewardsNestedSimple;
 import prism.PrismException;
 import prism.PrismLog;
 import prism.PrismUtils;
@@ -53,6 +54,14 @@ import strat.MDStrategy;
  * distributions for each state. This means that the player 2 states are not true
  * states, i.e. they don't count for statistics and player 1 states are treated
  * as successors of each other.
+ * <br><br>
+ * For this reason, methods to provide direct access transitions in an {@link STPG}
+ * ({@link #getNumChoices(int)}, {@link #getAction(int, int)} and {@link #getTransitionsIterator(int, int)})
+ * are not supported and "nested" variants are provided instead.
+ * If the {@code i}th choice of state {@code s} is nested (always true for this class),
+ * then {@link #isChoiceNested(int, int)} is true and transition info is available via methods
+ * Use {@link #getNumNestedChoices(int, int)}, {@link #getNestedAction(int, int, int)}
+ * and {@link #getNestedTransitionsIterator(int, int, int)}.
  */
 public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG<Value>, NondetModelSimple<Value>
 {
@@ -507,59 +516,6 @@ public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG
 	}
 	
 	@Override
-	public boolean isChoiceNested(int s, int i)
-	{
-		// All choices are nested
-		return true;
-	}
-
-	@Override
-	public int getNumNestedChoices(int s, int i)
-	{
-		return trans.get(s).get(i).size();
-	}
-
-	@Override
-	public Object getNestedAction(int s, int i, int j)
-	{
-		return trans.get(s).get(i).getAction();
-	}
-
-	@Override
-	public int getNumNestedTransitions(int s, int i, int j)
-	{
-		DistributionSet<Value> ds = trans.get(s).get(i);
-		Iterator<Distribution<Value>> iter = ds.iterator();
-		Distribution<Value> distr = null;
-		int k = 0;
-		while (iter.hasNext() && k <= j) {
-			distr = iter.next();
-			k++;
-		}
-		if (k <= j)
-			return 0;
-		else
-			return distr.size();
-	}
-
-	@Override
-	public Iterator<Entry<Integer, Value>> getNestedTransitionsIterator(int s, int i, int j)
-	{
-		DistributionSet<Value> ds = trans.get(s).get(i);
-		Iterator<Distribution<Value>> iter = ds.iterator();
-		Distribution<Value> distr = null;
-		int k = 0;
-		while (iter.hasNext() && k <= j) {
-			distr = iter.next();
-			k++;
-		}
-		if (k <= j)
-			return null;
-		else
-			return distr.iterator();
-	}
-
-	@Override
 	public void prob0step(BitSet subset, BitSet u, boolean forall1, boolean forall2, BitSet result)
 	{
 		boolean b1, b2, b3;
@@ -706,11 +662,11 @@ public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG
 	}
 
 	@Override
-	public double mvMultGSMinMax(double vect[], boolean min1, boolean min2, BitSet subset, boolean complement, boolean absolute)
+	public double mvMultGSMinMax(double vect[], boolean min1, boolean min2, BitSet subset, boolean complement, boolean absolute, int[] adv)
 	{
 		double d, diff, maxDiff = 0.0;
 		for (int s : new IterableStateSet(subset, numStates, complement)) {
-			d = mvMultJacMinMaxSingle(s, vect, min1, min2);
+			d = mvMultJacMinMaxSingle(s, vect, min1, min2, adv);
 			diff = absolute ? (Math.abs(d - vect[s])) : (Math.abs(d - vect[s]) / d);
 			maxDiff = diff > maxDiff ? diff : maxDiff;
 			vect[s] = d;
@@ -719,7 +675,7 @@ public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG
 	}
 
 	@Override
-	public double mvMultJacMinMaxSingle(int s, double vect[], boolean min1, boolean min2)
+	public double mvMultJacMinMaxSingle(int s, double vect[], boolean min1, boolean min2, int[] adv)
 	{
 		int k;
 		double diag, d, prob, minmax1, minmax2;
@@ -789,7 +745,7 @@ public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG
 			for (Distribution<Value> distr : distrs) {
 				dIter++;
 				// Compute sum for this distribution
-				d = rewards.getNestedTransitionReward(s, dsIter, dIter);
+				d = ((STPGRewardsNestedSimple<Double>) rewards).getNestedTransitionReward(s, dsIter, dIter);
 				for (Map.Entry<Integer, Value> e : distr) {
 					k = e.getKey();
 					prob = getEvaluator().toDouble(e.getValue());
@@ -832,7 +788,7 @@ public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG
 			for (Distribution<Value> distr : distrs) {
 				dIter++;
 				// Compute sum for this distribution
-				d = rewards.getNestedTransitionReward(s, dsIter, dIter);
+				d = ((STPGRewardsNestedSimple<Double>) rewards).getNestedTransitionReward(s, dsIter, dIter);
 				for (Map.Entry<Integer, Value> e : distr) {
 					k = e.getKey();
 					prob = getEvaluator().toDouble(e.getValue());
@@ -861,6 +817,71 @@ public class STPGAbstrSimple<Value> extends ModelExplicit<Value> implements STPG
 		throw new UnsupportedOperationException();
 	}
 	
+	// Additional accessor that extended STPG with a "nested view"
+
+	/**
+	 * Is choice {@code i} of state {@code s} in nested form? (See {@link explicit.STPG} for details)
+	 */
+	public boolean isChoiceNested(int s, int i)
+	{
+		// All choices are nested
+		return true;
+	}
+
+	/**
+	 * Get the number of (nested) choices in choice {@code i} of state {@code s}.
+	 */
+	public int getNumNestedChoices(int s, int i)
+	{
+		return trans.get(s).get(i).size();
+	}
+
+	/**
+	 * Get the action label (if any) for nested choice {@code i,j} of state {@code s}.
+	 */
+	public Object getNestedAction(int s, int i, int j)
+	{
+		return trans.get(s).get(i).getAction();
+	}
+
+	/**
+	 * Get the number of transitions from nested choice {@code i,j} of state {@code s}.
+	 */
+	public int getNumNestedTransitions(int s, int i, int j)
+	{
+		DistributionSet<Value> ds = trans.get(s).get(i);
+		Iterator<Distribution<Value>> iter = ds.iterator();
+		Distribution<Value> distr = null;
+		int k = 0;
+		while (iter.hasNext() && k <= j) {
+			distr = iter.next();
+			k++;
+		}
+		if (k <= j)
+			return 0;
+		else
+			return distr.size();
+	}
+
+	/**
+	 * Get an iterator over the transitions from nested choice {@code i,j} of state {@code s}.
+	 */
+	public Iterator<Entry<Integer, Value>> getNestedTransitionsIterator(int s, int i, int j)
+	{
+		DistributionSet<Value> ds = trans.get(s).get(i);
+		Iterator<Distribution<Value>> iter = ds.iterator();
+		Distribution<Value> distr = null;
+		int k = 0;
+		while (iter.hasNext() && k <= j) {
+			distr = iter.next();
+			k++;
+		}
+		if (k <= j)
+			return null;
+		else
+			return distr.iterator();
+	}
+
 	// Accessors (other)
 
 	/**
